@@ -2,7 +2,7 @@ name: Check PR Checklist
 
 on:
   workflow_run:
-    workflows: [Check File Size, Check Image EXIF Data]
+    workflows: [Check File Size]
     types: [completed]
   pull_request_target:
     types: [edited]
@@ -255,22 +255,33 @@ jobs:
             }
 
             const workflowItems = checklistItems.filter(item => item.workflow);
-            for (const item of workflowItems) {
-              item.run = await getLatestWorkflowRun(
-                item.workflow.id,
-                pr.head.sha,
-                prNumber
-              );
-            }
+            let activeRuns = [];
+            for (let attempt = 0; attempt < 24; attempt++) {
+              for (const item of workflowItems) {
+                item.run = await getLatestWorkflowRun(
+                  item.workflow.id,
+                  pr.head.sha,
+                  prNumber
+                );
+              }
 
-            const activeRuns = workflowItems.filter(item =>
-              item.run && item.run.status !== 'completed'
-            );
-            if (activeRuns.length > 0) {
+              activeRuns = workflowItems.filter(item =>
+                item.run && item.run.status !== 'completed'
+              );
+              if (activeRuns.length === 0) break;
+
               core.info(
                 `Waiting for: ${activeRuns.map(item => item.workflow.name).join(', ')}`
               );
-              return;
+              if (attempt < 23) {
+                await new Promise(resolve => setTimeout(resolve, 5000));
+              }
+            }
+
+            if (activeRuns.length > 0) {
+              core.warning(
+                `Timed out waiting for: ${activeRuns.map(item => item.workflow.name).join(', ')}`
+              );
             }
 
             const folderItem = checklistItems.find(item => item.key === 'folder');
@@ -331,7 +342,7 @@ jobs:
             if (unsuccessfulChecks.length > 0) {
               commentLines.push('以下自动检查未成功，因此未自动勾选对应项目：');
               commentLines.push(...unsuccessfulChecks.map(item =>
-                `- ${item.workflow.name}: ${item.run.conclusion}`
+                `- ${item.workflow.name}: ${item.run.conclusion || item.run.status}`
               ));
               commentLines.push('');
             }

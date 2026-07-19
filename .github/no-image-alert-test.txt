@@ -1,1 +1,2 @@
 No-image alert rendering test.
+Trigger image checks without images.

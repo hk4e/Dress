@@ -432,7 +432,8 @@ jobs:
             ];
 
             if (noChangedImages) {
-              commentLines.push('我们需要自己的女装照哦~');
+              commentLines.push('> [!IMPORTANT]');
+              commentLines.push('> **我们需要自己的女装照哦~**');
               commentLines.push('');
             }
 

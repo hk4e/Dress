@@ -69,6 +69,27 @@ jobs:
               if (context.payload.pull_request) return context.payload.pull_request;
 
               const workflowRun = context.payload.workflow_run;
+              if (workflowRun.event === 'workflow_dispatch') {
+                const match = workflowRun.display_title.match(
+                  /^PR #(\d+) \(([0-9a-f]{40})\)$/
+                );
+                if (!match) {
+                  core.warning(`Cannot identify PR from workflow run ${workflowRun.id}.`);
+                  return null;
+                }
+
+                const { data } = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: Number(match[1]),
+                });
+                if (data.state !== 'open' || data.head.sha !== match[2]) {
+                  core.info(`Ignoring stale workflow run ${workflowRun.id}.`);
+                  return null;
+                }
+                return data;
+              }
+
               const associatedNumbers = new Set(
                 (workflowRun.pull_requests || []).map(pull => pull.number)
               );
@@ -119,20 +140,22 @@ jobs:
                 owner,
                 repo,
                 workflow_id: workflowId,
-                event: 'pull_request_target',
-                head_sha: headSha,
-                per_page: 20,
+                per_page: 100,
               });
 
-              // pull_request_target runs may omit pull_requests, so head_sha is the fallback key.
               return data.workflow_runs
-                .filter(run =>
-                  run.head_sha === headSha &&
-                  (
+                .filter(run => {
+                  if (run.event === 'workflow_dispatch') {
+                    return run.display_title === `PR #${pullNumber} (${headSha})`;
+                  }
+
+                  // pull_request_target runs may omit pull_requests, so head_sha is the fallback key.
+                  return run.event === 'pull_request_target' &&
+                    run.head_sha === headSha && (
                     (run.pull_requests || []).length === 0 ||
                     run.pull_requests.some(pull => pull.number === pullNumber)
-                  )
-                )
+                    );
+                })
                 .sort((left, right) => right.id - left.id)[0] || null;
             }
 

@@ -28,6 +28,8 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const STICKY_MARKER = '<!-- pr-checklist-auto-check -->';
+            const IMAGE_EXT = /\.(jpe?g|png|webp|tiff?|hei[cf]|avif|gif)$/i;
+            const ACTIVE_STATUSES = new Set(['added', 'modified', 'renamed', 'copied']);
             const CHECKBOX_LINE = /^\s*[-*]\s*\[[ xX]\]/;
             const CHECKED_LINE = /^\s*[-*]\s*\[[xX]\]/;
             const UNCHECKED_BOX = /^(\s*[-*]\s*\[)\s(\]\s*)/;
@@ -156,7 +158,6 @@ jobs:
             }
 
             function checkFolderPlacement(changedFiles) {
-              const activeStatuses = new Set(['added', 'modified', 'renamed', 'copied']);
               const rootExemptions = new Set([
                 '.gitattributes',
                 '.gitignore',
@@ -170,7 +171,7 @@ jobs:
               const invalid = [];
 
               for (const fileInfo of changedFiles) {
-                if (!activeStatuses.has(fileInfo.status)) continue;
+                if (!ACTIVE_STATUSES.has(fileInfo.status)) continue;
 
                 const file = fileInfo.filename.replace(/\\/g, '/');
                 const parts = file.split('/').filter(Boolean);
@@ -255,9 +256,27 @@ jobs:
             }
 
             const workflowItems = checklistItems.filter(item => item.workflow);
-            let activeRuns = [];
+            let changedFiles = [];
+            let changedFilesError = null;
+            try {
+              changedFiles = await listChangedFiles(pr);
+            } catch (error) {
+              changedFilesError = error;
+              core.warning(`Cannot list changed files: ${error.message}`);
+            }
+
+            // If the changed-file query fails, require EXIF success rather than
+            // treating an unknown set of files as having no images.
+            const hasChangedImages = Boolean(changedFilesError) || changedFiles.some(file =>
+              ACTIVE_STATUSES.has(file.status) && IMAGE_EXT.test(file.filename)
+            );
+            const requiredWorkflowItems = workflowItems.filter(item =>
+              item.key !== 'exif' || hasChangedImages
+            );
+
+            let pendingRuns = [];
             for (let attempt = 0; attempt < 24; attempt++) {
-              for (const item of workflowItems) {
+              for (const item of requiredWorkflowItems) {
                 item.run = await getLatestWorkflowRun(
                   item.workflow.id,
                   pr.head.sha,
@@ -265,36 +284,41 @@ jobs:
                 );
               }
 
-              activeRuns = workflowItems.filter(item =>
-                item.run && item.run.status !== 'completed'
+              pendingRuns = requiredWorkflowItems.filter(item =>
+                !item.run || item.run.status !== 'completed'
               );
-              if (activeRuns.length === 0) break;
+              if (pendingRuns.length === 0) break;
 
               core.info(
-                `Waiting for: ${activeRuns.map(item => item.workflow.name).join(', ')}`
+                `Waiting for: ${pendingRuns.map(item => item.workflow.name).join(', ')}`
               );
               if (attempt < 23) {
                 await new Promise(resolve => setTimeout(resolve, 5000));
               }
             }
 
-            if (activeRuns.length > 0) {
+            if (pendingRuns.length > 0) {
               core.warning(
-                `Timed out waiting for: ${activeRuns.map(item => item.workflow.name).join(', ')}`
+                `Timed out waiting for: ${pendingRuns.map(item => item.workflow.name).join(', ')}`
               );
             }
 
             const folderItem = checklistItems.find(item => item.key === 'folder');
             let folderResult;
-            try {
-              folderResult = checkFolderPlacement(await listChangedFiles(pr));
-            } catch (error) {
-              core.warning(`Cannot check folder placement: ${error.message}`);
-              folderResult = { passed: false, invalid: [], error: error.message };
+            if (changedFilesError) {
+              folderResult = {
+                passed: false,
+                invalid: [],
+                error: changedFilesError.message,
+              };
+            } else {
+              folderResult = checkFolderPlacement(changedFiles);
             }
 
             for (const item of workflowItems) {
-              item.autoPassed = item.run?.conclusion === 'success';
+              item.autoPassed =
+                !requiredWorkflowItems.includes(item) ||
+                item.run?.conclusion === 'success';
             }
             folderItem.autoPassed = folderResult.passed;
             const automatedItems = [...workflowItems, folderItem];
@@ -322,10 +346,10 @@ jobs:
             const uncheckedItems = checklistItems.filter(item =>
               item.index >= 0 && !isChecked(item)
             );
-            const unsuccessfulChecks = workflowItems.filter(item =>
+            const unsuccessfulChecks = requiredWorkflowItems.filter(item =>
               item.run && item.run.conclusion !== 'success'
             );
-            const unavailableChecks = workflowItems.filter(item => !item.run);
+            const unavailableChecks = requiredWorkflowItems.filter(item => !item.run);
 
             const commentLines = [
               STICKY_MARKER,
@@ -378,7 +402,9 @@ jobs:
             const incomplete =
               missingItems.length > 0 ||
               uncheckedItems.length > 0 ||
-              !folderResult.passed;
+              !folderResult.passed ||
+              unsuccessfulChecks.length > 0 ||
+              unavailableChecks.length > 0;
             if (incomplete || fallbackChecked.length > 0) {
               commentLines.push(
                 incomplete

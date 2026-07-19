@@ -1,0 +1,1 @@
+No-image alert rendering test.

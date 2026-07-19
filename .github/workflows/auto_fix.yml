@@ -69,19 +69,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr diff ${{ github.event.issue.number }} --name-only | grep -iE '\.(jpe?g|png|webp|tiff?|hei[cf]|avif|gif)$' > changed_images.txt || true
+          gh pr diff ${{ github.event.issue.number }} --name-only | grep -iE '\.(jpe?g|png|webp|tiff?|hei[cf]|avif|gif)$' > "$RUNNER_TEMP/changed_images.txt" || true
           
-          if [ ! -s changed_images.txt ]; then
+          if [ ! -s "$RUNNER_TEMP/changed_images.txt" ]; then
             echo "No images changed in this PR."
             exit 0
           fi
           
           echo "Changed images to process:"
-          cat changed_images.txt
+          cat "$RUNNER_TEMP/changed_images.txt"
 
       - name: Process Phase 1 - Remove EXIF Data
         run: |
-          if [ ! -s changed_images.txt ]; then exit 0; fi
+          if [ ! -s "$RUNNER_TEMP/changed_images.txt" ]; then exit 0; fi
           
           exif_files_changed=0
           while IFS= read -r file; do
@@ -90,13 +90,13 @@ jobs:
               if [ "$count" -gt 0 ]; then
                 echo "Removing EXIF: $file"
                 exiftool -all= -overwrite_original "$file"
+                git add -- "$file"
                 exif_files_changed=1
               fi
             fi
-          done < changed_images.txt
+          done < "$RUNNER_TEMP/changed_images.txt"
 
           if [ "$exif_files_changed" -eq 1 ]; then
-            git add .
             git commit -m "chore: auto-remove EXIF data from images" || true
           fi
 
@@ -104,7 +104,7 @@ jobs:
         id: compress
         continue-on-error: true
         run: |
-          if [ ! -s changed_images.txt ]; then exit 0; fi
+          if [ ! -s "$RUNNER_TEMP/changed_images.txt" ]; then exit 0; fi
           
           size_files_changed=0
           failed_files=()
@@ -138,11 +138,12 @@ jobs:
                    echo "Failed to compress $file below 1MB (Current: $new_size bytes)"
                    failed_files+=("$file")
                 else
+                   git add -- "$file"
                    size_files_changed=1
                 fi
               fi
             fi
-          done < changed_images.txt
+          done < "$RUNNER_TEMP/changed_images.txt"
 
           if [ ${#failed_files[@]} -gt 0 ]; then
              echo "Some files failed to compress below 1MB."
@@ -159,7 +160,6 @@ jobs:
           fi
 
           if [ "$size_files_changed" -eq 1 ]; then
-            git add .
             git commit -m "chore: auto-compress oversized images" || true
           fi
 

@@ -320,9 +320,11 @@ jobs:
 
             // If the changed-file query fails, require EXIF success rather than
             // treating an unknown set of files as having no images.
-            const hasChangedImages = Boolean(changedFilesError) || changedFiles.some(file =>
+            const changedImages = changedFiles.some(file =>
               ACTIVE_STATUSES.has(file.status) && IMAGE_EXT.test(file.filename)
             );
+            const hasChangedImages = Boolean(changedFilesError) || changedImages;
+            const noChangedImages = !changedFilesError && !changedImages;
             const requiredWorkflowItems = workflowItems.filter(item =>
               item.key !== 'exif' || hasChangedImages
             );
@@ -370,8 +372,11 @@ jobs:
 
             for (const item of workflowItems) {
               item.autoPassed =
-                !requiredWorkflowItems.includes(item) ||
-                item.run?.conclusion === 'success';
+                !(item.key === 'exif' && noChangedImages) &&
+                (
+                  !requiredWorkflowItems.includes(item) ||
+                  item.run?.conclusion === 'success'
+                );
             }
             folderItem.autoPassed = folderResult.passed;
             const automatedItems = [...workflowItems, folderItem];
@@ -409,6 +414,11 @@ jobs:
               '**PR 检查清单 / PR checklist**',
               '',
             ];
+
+            if (noChangedImages) {
+              commentLines.push('我们需要自己的女装照哦~');
+              commentLines.push('');
+            }
 
             if (fallbackChecked.length > 0) {
               commentLines.push('以下项目未由贡献者勾选，已在自动检查通过后补充勾选：');
@@ -453,6 +463,7 @@ jobs:
             }
 
             const incomplete =
+              noChangedImages ||
               missingItems.length > 0 ||
               uncheckedItems.length > 0 ||
               !folderResult.passed ||

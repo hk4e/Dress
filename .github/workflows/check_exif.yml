@@ -5,7 +5,6 @@ run-name: "PR #${{ github.event.pull_request.number || inputs.pr_number }} (${{ 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
-    paths: ['**/*.jpg', '**/*.jpeg', '**/*.png', '**/*.webp', '**/*.tiff', '**/*.tif', '**/*.heic', '**/*.heif', '**/*.avif', '**/*.gif']
   workflow_dispatch:
     inputs:
       pr_number:
@@ -94,7 +93,10 @@ jobs:
               if (!cmp.files || cmp.files.length < 100) break;
               comparePage++;
             }
-            if (!changedImages.length) { core.info('No changed images.'); return; }
+            if (!changedImages.length) {
+              core.setFailed('No changed images found.');
+              return;
+            }
             core.info(`Checking ${changedImages.length} image(s) for EXIF data.`);
 
             // 2. Download & check each image

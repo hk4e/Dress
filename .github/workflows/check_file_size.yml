@@ -33,6 +33,8 @@ jobs:
         with:
           script: |
             const MAX_SIZE = 1024 * 1024; // 1 MB
+            const IMAGE_EXT = /\.(jpe?g|png|webp|tiff?|hei[cf]|avif|gif)$/i;
+            const ACTIVE_STATUSES = new Set(['added', 'modified', 'renamed', 'copied']);
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             let pr = context.payload.pull_request;
@@ -80,10 +82,18 @@ jobs:
               page++;
             }
 
+            const hasChangedImages = files.some(file =>
+              ACTIVE_STATUSES.has(file.status) && IMAGE_EXT.test(file.filename)
+            );
+            if (!hasChangedImages) {
+              core.setFailed('No changed images found.');
+              return;
+            }
+
             for (const file of files) {
               try {
                 // 只检查新增或修改文件
-                if (!['added','modified','renamed','copied'].includes(file.status))
+                if (!ACTIVE_STATUSES.has(file.status))
                   continue;
 
                 // 先编码 %，再编码 # 和 ?，避免双重编码问题。
